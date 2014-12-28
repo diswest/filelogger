@@ -1,0 +1,15 @@
+{
+    "name": "diswest/filelogger",
+    "require": {
+        "php": ">=5.4.0",
+        "psr/log": "~1.0"
+    },
+    "require_dev": {
+        "phpunit/phpunit": ">=4.4.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Diswest\\FileLogger\\": "diswest/filelogger/src"
+        }
+    }
+}
