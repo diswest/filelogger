@@ -2,6 +2,7 @@
     "name": "diswest/filelogger",
     "description": "Simple file logger",
     "license": "MIT",
+    "version": "1.0.0",
     "require": {
         "php": ">=5.4.0",
         "psr/log": "~1.0"
