@@ -3,7 +3,9 @@
 namespace Diswest\FileLogger;
 
 use DateTime;
+use Diswest\FileLogger\Exception\IncorrectPathException;
 use Exception;
+use Exception\FilesystemException;
 use Psr\Log\AbstractLogger;
 use Psr\Log\InvalidArgumentException;
 use Psr\Log\LogLevel;
@@ -13,6 +15,22 @@ use Psr\Log\LogLevel;
  */
 class FileLogger extends AbstractLogger
 {
+    /**
+     * Number of bytes in megabyte
+     */
+    const BYTES_IN_MB = 1048576;
+
+    /**
+     * Extension of log files
+     */
+    const LOG_EXTENSION = '.log';
+
+    /**
+     * Log path
+     * @var string
+     */
+    protected $path = null;
+
     /**
      * Name of the log
      * @var string
@@ -42,7 +60,7 @@ class FileLogger extends AbstractLogger
      * List of correct levels with priority
      * @var array
      */
-    protected $levels = array(
+    protected $levels = [
         LogLevel::DEBUG     => 10,
         LogLevel::INFO      => 20,
         LogLevel::NOTICE    => 30,
@@ -51,35 +69,42 @@ class FileLogger extends AbstractLogger
         LogLevel::CRITICAL  => 60,
         LogLevel::ALERT     => 70,
         LogLevel::EMERGENCY => 80,
-    );
+    ];
 
     /**
-     * @param string $name Name of the log
-     * @param string $level Minimum handled level
-     * @param int    $maxFileSize Maximum size of logfile
+     * @param string                     $path Log path
+     * @param string                     $name Name of the log
+     * @param string                     $level Minimum handled level
+     * @param int                        $maxFileSize Maximum size of logfile
+     * @param FilesystemHandlerInterface $filesystemHandler
+     *
+     * @throws IncorrectPathException
      */
-    public function __construct($name, $level = LogLevel::DEBUG, $maxFileSize = 100)
-    {
+    public function __construct(
+        $path,
+        $name,
+        $level = LogLevel::DEBUG,
+        $maxFileSize = 100,
+        FilesystemHandlerInterface $filesystemHandler = null
+    ) {
         // Handle unsupported level
-        if (isset($this->levels[$level])) {
+        if (!isset($this->levels[$level])) {
             throw new InvalidArgumentException('Unknown log level: ' . var_export($level, true));
         }
 
-        $this->name        = $name;
-        $this->level       = $level;
-        $this->maxFileSize = $maxFileSize;
-    }
+        $this->path              = $path;
+        $this->name              = $name;
+        $this->level             = $level;
+        $this->maxFileSize       = $maxFileSize * self::BYTES_IN_MB;
 
-    /**
-     * Set filesystem handler
-     *
-     * @param FilesystemHandlerInterface $filesystemHandler
-     *
-     * @return $this
-     */
-    public function setFilesystemHandler(FilesystemHandlerInterface $filesystemHandler) {
+        if (!$filesystemHandler) {
+            $filesystemHandler = new FilesystemHandler();
+        }
         $this->filesystemHandler = $filesystemHandler;
-        return $this;
+
+        if (!$filesystemHandler->checkPath($this->path)) {
+            throw new IncorrectPathException($this->path);
+        }
     }
 
     /**
@@ -94,7 +119,7 @@ class FileLogger extends AbstractLogger
     public function log($level, $message, array $context = array())
     {
         // Handle unsupported level
-        if (isset($this->levels[$level])) {
+        if (!isset($this->levels[$level])) {
             throw new InvalidArgumentException('Unsupported log level: ' . var_export($level, true));
         }
 
@@ -105,11 +130,12 @@ class FileLogger extends AbstractLogger
 
         $logFile = $this->getLogFile();
         $preparedMessage = $this->prepareMessage($message, $context);
-        $this->getFileSystemHandler()->write($logFile, $preparedMessage);
+        $this->filesystemHandler->write($logFile, $preparedMessage);
     }
 
     /**
-     * Check that the variable can be converted to string
+     * Checks whether the variable can be converted to string
+     *
      * @param mixed $var
      *
      * @return bool
@@ -132,33 +158,59 @@ class FileLogger extends AbstractLogger
     }
 
     /**
-     * Returns filesystem handler object
-     *
-     * @return FilesystemHandlerInterface
-     */
-    protected function getFileSystemHandler()
-    {
-        if (!$this->filesystemHandler) {
-            $this->filesystemHandler = new FilesystemHandler();
-        }
-
-        return $this->filesystemHandler;
-    }
-
-    /**
      * Returns logfile
      *
      * @return string mixed
      */
     protected function getLogFile()
     {
-        $name = $this->name;
-        return $name;
+        $logFileWithoutExtension = $this->getLogDirectory() . DIRECTORY_SEPARATOR . $this->name;
+        $logFile = $logFileWithoutExtension . self::LOG_EXTENSION;
+
+        // Rotate file if full
+        if ($this->filesystemHandler->isExists($logFile) && $this->isLogFileFull($logFile)) {
+            $endTime = (new DateTime())->format('Y-m-d H:i:s');
+            $endTime = strtr($endTime, ' ', '_');
+            $archiveLogFile = $logFileWithoutExtension . '_' . $endTime . self::LOG_EXTENSION;
+            $this->filesystemHandler->mv($logFile, $archiveLogFile);
+            $this->filesystemHandler->close();
+        }
+
+        return $logFile;
     }
 
-    protected function createLogDirectory()
+    /**
+     * Returns actual directory for current log
+     *
+     * @return string
+     * @throws FilesystemException
+     */
+    protected function getLogDirectory()
     {
+        $logDir = $this->path . DIRECTORY_SEPARATOR . $this->name;
 
+        // Create dir if not exists
+        if (!$this->filesystemHandler->isDir($logDir)) {
+            if (!$this->filesystemHandler->mkdir($logDir)) {
+                throw new FilesystemException('Can\'t create log dir ' . $logDir);
+            }
+        }
+
+        return $logDir;
+    }
+
+    /**
+     * Checks size of log file
+     *
+     * @param $logFile
+     *
+     * @return bool
+     */
+    protected function isLogFileFull($logFile)
+    {
+        $fileSize = $this->filesystemHandler->getFileSize($logFile);
+
+        return $fileSize >= $this->maxFileSize;
     }
 
     /**
@@ -171,12 +223,14 @@ class FileLogger extends AbstractLogger
      */
     protected function prepareMessage($message, array $context)
     {
-        $messageData = array(
+        $messageData = [
             $this->getCurrentTime(),
             strtoupper($this->level),
             $this->interpolate($message, $context),
-        );
-        $preparedMessage = sprintf('%s\t%s\t', $messageData);
+        ];
+
+        $preparedMessage = vsprintf("%s\t%s\t%s\n", $messageData);
+
         return $preparedMessage;
     }
 
@@ -206,30 +260,32 @@ class FileLogger extends AbstractLogger
      */
     protected function interpolate($message, array $context)
     {
+        $replace = [];
+
         foreach ($context as $key => $item) {
             if (!$this->isConvertibleToString($item)) {
                 continue;
             }
 
-            if (is_object($item)) {
-                // Item with key 'exception' must be instance of Exception
-                if ($key == 'exception' && !($item instanceof Exception)) {
-                    continue;
-                }
+            $wrappedKey = '{' . $key . '}';
 
-                // Convert object to string
-                $replace = $item->__toString();
-            } elseif (is_bool($item)) {
-                // Readable boolean
-                $replace = ($item) ? 'true' : 'false';
-            } else {
-                // Any other string-compatible value
-                $replace = (string) $item;
+            // Item with key 'exception' must be instance of Exception
+            if ($key == 'exception' && !($item instanceof Exception)) {
+                continue;
             }
 
-            $message = str_replace('{' . $key . '}', $replace, $message);
+            if (is_object($item)) {
+                // Convert object to string
+                $replace[$wrappedKey] = $item->__toString();
+            } elseif (is_bool($item)) {
+                // Readable boolean
+                $replace[$wrappedKey] = ($item) ? 'true' : 'false';
+            } else {
+                // Any other string-compatible value
+                $replace[$wrappedKey] = (string) $item;
+            }
         }
 
-        return $message;
+        return strtr($message, $replace);
     }
 }

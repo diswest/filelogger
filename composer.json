@@ -1,15 +1,23 @@
 {
     "name": "diswest/filelogger",
+    "description": "Simple file logger",
+    "license": "MIT",
     "require": {
         "php": ">=5.4.0",
         "psr/log": "~1.0"
     },
-    "require_dev": {
-        "phpunit/phpunit": ">=4.4.0"
+    "require-dev": {
+        "phpunit/phpunit": ">=4.4.0",
+        "mikey179/vfsStream": ">=1.4.0"
     },
     "autoload": {
         "psr-4": {
-            "Diswest\\FileLogger\\": "diswest/filelogger/src"
+            "Diswest\\FileLogger\\": "src"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Diswest\\FileLogger\\Tests\\": "tests"
         }
     }
 }
